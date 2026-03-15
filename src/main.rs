@@ -13,9 +13,16 @@ fn main() {
         match stream {
             Ok(mut _stream) => {
                 println!("accepted new connection");
-                let mut buffer = [0; 1024];
-                _stream.read(&mut buffer).unwrap();
-                _stream.write_all(b"+PONG\r\n").unwrap();
+                let mut buffer: [u8; 1024] = [0; 1024];
+                loop {
+                    _stream.read(&mut buffer).unwrap();
+                    match _stream.read(&mut buffer) {
+                        Ok(0) => break, 
+                        Ok(n) => n,
+                        Err(_) => break,
+                    };
+                    _stream.write_all(b"+PONG\r\n").unwrap();
+                }
             }
             Err(e) => {
                 println!("error: {}", e);

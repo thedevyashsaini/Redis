@@ -3,8 +3,8 @@ use mio::{Events, Interest, Poll, Token};
 use slab::Slab;
 use std::io::{Read, Write};
 
-mod resp;
-use resp::{parse_command};
+mod commands;
+use commands::parse_command;
 
 const SERVER: Token = Token(0);
 
@@ -26,29 +26,27 @@ fn main() -> std::io::Result<()> {
 
         for event in events.iter() {
             match event.token() {
-                SERVER => {
-                    loop {
-                        match listener.accept() {
-                            Ok((mut stream, _addr)) => {
-                                let entry = connections.vacant_entry();
-                                let token: Token = Token(entry.key() + 1);
+                SERVER => loop {
+                    match listener.accept() {
+                        Ok((mut stream, _addr)) => {
+                            let entry = connections.vacant_entry();
+                            let token: Token = Token(entry.key() + 1);
 
-                                poll.registry()
-                                    .register(&mut stream, token, Interest::READABLE)?;
+                            poll.registry()
+                                .register(&mut stream, token, Interest::READABLE)?;
 
-                                entry.insert(stream);
-                            }
-                            Err(e) => {
-                                if e.kind() == std::io::ErrorKind::WouldBlock {
-                                    break;
-                                } else {
-                                    eprintln!("accept error: {}", e);
-                                    break;
-                                }
+                            entry.insert(stream);
+                        }
+                        Err(e) => {
+                            if e.kind() == std::io::ErrorKind::WouldBlock {
+                                break;
+                            } else {
+                                eprintln!("accept error: {}", e);
+                                break;
                             }
                         }
                     }
-                }
+                },
 
                 token => {
                     let idx = token.0 - 1;
@@ -62,20 +60,23 @@ fn main() -> std::io::Result<()> {
                             }
                             Ok(_n) => {
                                 println!(
-                                    "Received: {}",
+                                    "Received: \r\n{}",
                                     std::str::from_utf8(&buffer)
                                         .unwrap()
                                         .trim()
-                                        .replace("\r\n", "\\r\\n")
                                 );
 
-                                if let Some((cmd, _consumed)) = parse_command(&buffer) {
-                                    println!("Parsed command: {:?}", cmd);
+                                match parse_command(&buffer) {
+                                    Ok(mut command) => {
+                                        println!("Command: {:?}", command.cmd_type);
 
-                                    let response = handle_command(cmd);
-                                    let _ = stream.write_all(response.as_bytes());
-                                } else {
-                                    let _ = stream.write_all(b"-ERR invalid RESP\r\n");
+                                        let response = command.process().unwrap();
+                                        let _ = stream.write_all(response.as_bytes());
+                                    }
+
+                                    Err(_) => {
+                                        let _ = stream.write_all(b"-ERR invalid RESP\r\n");
+                                    }
                                 }
                             }
                             Err(e) => {
@@ -89,29 +90,5 @@ fn main() -> std::io::Result<()> {
                 }
             }
         }
-    }
-}
-
-fn handle_command(cmd: Vec<String>) -> String {
-    if cmd.is_empty() {
-        return "-ERR empty command\r\n".to_string();
-    }
-
-    match cmd[0].to_uppercase().as_str() {
-        "PING" => {
-            if cmd.len() > 1 {
-                format!("${}\r\n{}\r\n", cmd[1].len(), cmd[1])
-            } else {
-                "+PONG\r\n".to_string()
-            }
-        }
-        "ECHO" => {
-            if cmd.len() < 2 {
-                "-ERR wrong number of arguments\r\n".to_string()
-            } else {
-                format!("${}\r\n{}\r\n", cmd[1].len(), cmd[1])
-            }
-        }
-        _ => "-ERR unknown command\r\n".to_string(),
     }
 }

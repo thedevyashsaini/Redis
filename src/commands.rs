@@ -131,20 +131,31 @@ impl Command<'_> {
 
             CommandType::RPUSH => {
                 let key = self.args.get(0).ok_or("ERR missing key")?;
-                let value = self.args.get(1).ok_or("ERR missing value")?;
+                if self.args.len() < 2 {
+                    return Err(b"-ERR wrong number of arguments\r\n".to_vec());
+                }
+
+                let values = &self.args[1..];
+
+                let list_len: usize;
 
                 if let Some(Entry {
                     value: Value::List(ref mut list),
                     ..
                 }) = db.get_mut(*key)
                 {
-                    list.push_front(value.to_vec());
-                    let mut res = Vec::with_capacity(32);
-                    write!(res, ":{}\r\n", list.len()).unwrap();
-                    Ok(res)
+                    for v in values {
+                        list.push_front(v.to_vec());
+                    }
+                    list_len = list.len();
                 } else {
                     let mut newlist = VecDeque::new();
-                    newlist.push_front(value.to_vec());
+                    for v in values {
+                        newlist.push_front(v.to_vec());
+                    }
+
+                    list_len = newlist.len();
+
                     db.insert(
                         key.to_vec(),
                         Entry {
@@ -152,8 +163,11 @@ impl Command<'_> {
                             expiry: None,
                         },
                     );
-                    Ok(b":1\r\n".to_vec())
                 }
+
+                let mut res = Vec::with_capacity(32);
+                write!(res, ":{}\r\n", list_len).unwrap();
+                Ok(res)
             }
 
             CommandType::GET => {

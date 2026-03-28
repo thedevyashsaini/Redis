@@ -5,10 +5,10 @@ use std::io::{Read, Write};
 
 mod commands;
 use commands::parse_command;
-use std::collections::{HashMap, VecDeque};
-use std::time::Instant;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
+use std::collections::{HashMap, VecDeque};
+use std::time::Instant;
 
 const SERVER: Token = Token(0);
 const MAX_CLEANUP: usize = 169;
@@ -75,7 +75,6 @@ fn main() -> std::io::Result<()> {
                     let mut should_remove = false;
 
                     if let Some((stream, r_buffer, w_buffer)) = connections.get_mut(idx) {
-
                         if event.is_readable() {
                             let mut temp: [u8; 1024] = [0; 1024];
 
@@ -92,14 +91,18 @@ fn main() -> std::io::Result<()> {
                                         Ok(command) => {
                                             println!("Command: {:?}", command.cmd_type);
 
-                                            let response = command.process(&mut db, &mut expiries).unwrap();
+                                            let response =
+                                                command.process(&mut db, &mut expiries).unwrap();
 
                                             let is_empty: bool = w_buffer.is_empty();
                                             w_buffer.extend_from_slice(&response);
 
                                             if is_empty {
-                                                poll.registry()
-                                                    .reregister(stream, token, Interest::READABLE.add(Interest::WRITABLE), )?;
+                                                poll.registry().reregister(
+                                                    stream,
+                                                    token,
+                                                    Interest::READABLE.add(Interest::WRITABLE),
+                                                )?;
                                             }
                                             r_buffer.clear();
                                         }
@@ -109,8 +112,11 @@ fn main() -> std::io::Result<()> {
                                             w_buffer.extend_from_slice(b"-ERR invalid RESP\r\n");
 
                                             if is_empty {
-                                                poll.registry()
-                                                    .reregister(stream, token, Interest::READABLE.add(Interest::WRITABLE), )?;
+                                                poll.registry().reregister(
+                                                    stream,
+                                                    token,
+                                                    Interest::READABLE.add(Interest::WRITABLE),
+                                                )?;
                                             }
                                             r_buffer.clear();
                                         }
@@ -140,11 +146,8 @@ fn main() -> std::io::Result<()> {
                             }
 
                             if w_buffer.is_empty() {
-                                poll.registry().reregister(
-                                    stream,
-                                    token,
-                                    Interest::READABLE,
-                                )?;
+                                poll.registry()
+                                    .reregister(stream, token, Interest::READABLE)?;
                             }
                         }
                     }
@@ -158,10 +161,7 @@ fn main() -> std::io::Result<()> {
     }
 }
 
-fn cleanup_expired(
-    db: &mut DB,
-    expiries: &mut BinaryHeap<(Reverse<Instant>, Vec<u8>)>,
-) {
+fn cleanup_expired(db: &mut DB, expiries: &mut BinaryHeap<(Reverse<Instant>, Vec<u8>)>) {
     let rn = Instant::now();
     let mut cleaned: usize = 0;
 
@@ -172,12 +172,16 @@ fn cleanup_expired(
 
         expiries.pop();
 
-        if let Some(Entry { expiry: Some(actual_expiry), .. }) = db.get(&key) {
+        if let Some(Entry {
+            expiry: Some(actual_expiry),
+            ..
+        }) = db.get(&key)
+        {
             if *actual_expiry == expiry {
                 db.remove(&key);
             }
         }
 
-        cleaned +=1;
+        cleaned += 1;
     }
 }

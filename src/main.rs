@@ -5,13 +5,25 @@ use std::io::{Read, Write};
 
 mod commands;
 use commands::parse_command;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
 const SERVER: Token = Token(0);
 const MAX_CLEANUP: usize = 169;
+
+pub enum Value {
+    String(Vec<u8>),
+    List(VecDeque<Vec<u8>>),
+}
+
+pub struct Entry {
+    value: Value,
+    expiry: Option<Instant>,
+}
+
+pub type DB = HashMap<Vec<u8>, Entry>;
 
 fn main() -> std::io::Result<()> {
     println!("Starting Redis-like server on 127.0.0.1:6379");
@@ -25,7 +37,7 @@ fn main() -> std::io::Result<()> {
 
     let mut connections = Slab::new();
 
-    let mut db: HashMap<Vec<u8>, (Vec<u8>, Option<Instant>)> = HashMap::new();
+    let mut db: DB = HashMap::new();
     let mut expiries: BinaryHeap<(Reverse<Instant>, Vec<u8>)> = BinaryHeap::new();
 
     loop {
@@ -147,7 +159,7 @@ fn main() -> std::io::Result<()> {
 }
 
 fn cleanup_expired(
-    db: &mut HashMap<Vec<u8>, (Vec<u8>, Option<Instant>)>,
+    db: &mut DB,
     expiries: &mut BinaryHeap<(Reverse<Instant>, Vec<u8>)>,
 ) {
     let rn = Instant::now();
@@ -160,7 +172,7 @@ fn cleanup_expired(
 
         expiries.pop();
 
-        if let Some((_, Some(actual_expiry))) = db.get(&key) {
+        if let Some(Entry { expiry: Some(actual_expiry), .. }) = db.get(&key) {
             if *actual_expiry == expiry {
                 db.remove(&key);
             }

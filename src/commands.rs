@@ -1,8 +1,9 @@
 use std::cmp::Reverse;
-use std::collections::HashMap;
-use std::time::Instant;
 use std::collections::BinaryHeap;
 use std::io::Write;
+use std::time::Instant;
+
+use crate::{Entry, Value, DB};
 
 pub fn read_line(buf: &[u8], start: usize) -> Option<(usize, usize)> {
     for i in start..buf.len() - 1 {
@@ -19,7 +20,10 @@ pub fn parse_bulk_string(buf: &[u8], start: usize) -> Option<(&[u8], usize)> {
     }
 
     let (len_start, len_end) = read_line(buf, start + 1)?;
-    let len = std::str::from_utf8(&buf[len_start..len_end - 2]).ok()?.parse::<usize>().ok()?;
+    let len = std::str::from_utf8(&buf[len_start..len_end - 2])
+        .ok()?
+        .parse::<usize>()
+        .ok()?;
 
     let data_start = len_end;
     let data_end = data_start + len;
@@ -39,7 +43,7 @@ pub enum CommandType {
 
     // KV
     SET,
-    GET
+    GET,
 }
 
 #[derive(Debug)]
@@ -49,7 +53,11 @@ pub struct Command<'a> {
 }
 
 impl Command<'_> {
-    pub(crate) fn process(&self, db: &mut HashMap<Vec<u8>, (Vec<u8>, Option<Instant>)>, expiries: &mut BinaryHeap<(Reverse<Instant>, Vec<u8>)>) -> Result<Vec<u8>, Vec<u8>> {
+    pub(crate) fn process(
+        &self,
+        db: &mut DB,
+        expiries: &mut BinaryHeap<(Reverse<Instant>, Vec<u8>)>,
+    ) -> Result<Vec<u8>, Vec<u8>> {
         match self.cmd_type {
             CommandType::PING => {
                 if !self.args.is_empty() {
@@ -87,11 +95,12 @@ impl Command<'_> {
                 if self.args.len() > 2 {
                     let option = std::str::from_utf8(self.args[2]).unwrap().to_uppercase();
 
-                    if option == "EX" ||  option == "PX" {
-                        let exp = std::str::from_utf8(self.args.get(3).ok_or("ERR missing EX value")?)
-                            .unwrap()
-                            .parse::<u64>()
-                            .map_err(|_| "ERR invalid EX/PX value")?;
+                    if option == "EX" || option == "PX" {
+                        let exp =
+                            std::str::from_utf8(self.args.get(3).ok_or("ERR missing EX value")?)
+                                .unwrap()
+                                .parse::<u64>()
+                                .map_err(|_| "ERR invalid EX/PX value")?;
 
                         let duration = if option == "PX" {
                             std::time::Duration::from_millis(exp)
@@ -107,27 +116,37 @@ impl Command<'_> {
                     expiries.push((Reverse(exp), key.to_vec()));
                 }
 
-                db.insert(key.to_vec(), (value.to_vec(), expiry));
+                db.insert(
+                    key.to_vec(),
+                    Entry {
+                        value: Value::String(value.to_vec()),
+                        expiry,
+                    },
+                );
                 Ok(b"+OK\r\n".to_vec())
             }
 
             CommandType::GET => {
                 let key = self.args.get(0).ok_or("ERR missing key")?;
 
-                if let Some((val, expiry)) = db.get(*key) {
-                    if let Some(exp) = expiry {
-                        if Instant::now() >= *exp {
+                if let Some(entry) = db.get(*key) {
+                    if let Some(exp) = entry.expiry {
+                        if Instant::now() >= exp {
                             db.remove(*key);
                             return Ok(b"$-1\r\n".to_vec());
                         }
                     }
-                    let mut res = Vec::with_capacity(val.len() + 32);
 
-                    write!(res, "${}\r\n", val.len()).unwrap();
-                    res.extend_from_slice(val);
-                    res.extend_from_slice(b"\r\n");
-
-                    Ok(res)
+                    match &entry.value {
+                        Value::String(val) => {
+                            let mut res = Vec::with_capacity(val.len() + 32);
+                            write!(res, "${}\r\n", val.len()).unwrap();
+                            res.extend_from_slice(val);
+                            res.extend_from_slice(b"\r\n");
+                            Ok(res)
+                        }
+                        _ => Err(b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n".to_vec()),
+                    }
                 } else {
                     Ok(b"$-1\r\n".to_vec())
                 }
@@ -162,6 +181,7 @@ pub fn parse_command(buf: &[u8]) -> Result<Command<'_>, Vec<u8>> {
         pos = new_pos;
     }
 
+    // heavy string thing, replace later prolly
     let cmd_type = match cmd.to_uppercase().as_str() {
         "PING" => CommandType::PING,
         "ECHO" => CommandType::ECHO,

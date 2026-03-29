@@ -53,7 +53,18 @@ fn main() -> std::io::Result<()> {
         cleanup_expired(&mut db, &mut expiries);
         cleanup_blocked(&mut connections, &mut blocked_timeouts, &mut poll);
 
-        poll.poll(&mut events, None)?;
+        let timeout = blocked_timeouts
+            .peek()
+            .map(|(Reverse(t), _)| {
+                let now = Instant::now();
+                if *t <= now {
+                    std::time::Duration::from_millis(0)
+                } else {
+                    *t - now
+                }
+            });
+
+        poll.poll(&mut events, timeout)?;
 
         for event in events.iter() {
             match event.token() {
@@ -132,12 +143,12 @@ fn main() -> std::io::Result<()> {
 
                                                                 let timeout = std::str::from_utf8(command.args[1])
                                                                     .unwrap()
-                                                                    .parse::<u64>()
+                                                                    .parse::<f64>()
                                                                     .unwrap();
 
-                                                                if timeout > 0 {
+                                                                if timeout > 0.0 {
                                                                     let deadline = Instant::now()
-                                                                        + std::time::Duration::from_secs(timeout);
+                                                                        + std::time::Duration::from_millis((timeout * 1000f64) as u64);
 
                                                                     *block_deadline = Some(deadline);
                                                                     blocked_timeouts.push((Reverse(deadline), token));
@@ -346,7 +357,7 @@ fn cleanup_blocked(
 
                 let was_empty = w_buffer.is_empty();
 
-                w_buffer.extend_from_slice(b"$-1\r\n");
+                w_buffer.extend_from_slice(b"*-1\r\n");
 
                 if was_empty {
                     poll.registry().reregister(

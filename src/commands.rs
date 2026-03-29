@@ -239,6 +239,47 @@ command_handler!(lrange, args, db, _expiries, {
     }
 });
 
+command_handler!(lpush, args, db, _expiries, {
+    let key = args.get(0).ok_or(b"ERR missing key".to_vec())?;
+    if args.len() < 2 {
+        return Err(b"-ERR wrong number of arguments\r\n".to_vec());
+    }
+
+    let values = &args[1..];
+
+    let list_len: usize;
+
+    if let Some(Entry {
+                    value: Value::List(ref mut list),
+                    ..
+                }) = db.get_mut(*key)
+    {
+        for v in values {
+            list.push_front(v.to_vec());
+        }
+        list_len = list.len();
+    } else {
+        let mut newlist = VecDeque::new();
+        for v in values {
+            newlist.push_front(v.to_vec());
+        }
+
+        list_len = newlist.len();
+
+        db.insert(
+            key.to_vec(),
+            Entry {
+                value: Value::List(newlist),
+                expiry: None,
+            },
+        );
+    }
+
+    let mut res = Vec::with_capacity(32);
+    write!(res, ":{}\r\n", list_len).unwrap();
+    Ok(res)
+});
+
 pub type CommandTable = HashMap<&'static [u8], CommandHandler>;
 
 pub fn command_table() -> CommandTable {
@@ -250,6 +291,7 @@ pub fn command_table() -> CommandTable {
     table.insert(b"GET", get);
     table.insert(b"RPUSH", rpush);
     table.insert(b"LRANGE", lrange);
+    table.insert(b"LPUSH", lpush);
     table
 }
 

@@ -370,6 +370,33 @@ command_handler!(lpop, args, db, _expiries, {
     }
 });
 
+command_handler!(blpop, args, db, _expiries, {
+    let key = args.get(0).ok_or(b"ERR missing key".to_vec())?;
+    let _ = args.get(1).ok_or(b"ERR missing timeout".to_vec())?;
+
+    if let Some(entry) = db.get_mut(*key) {
+        if let Value::List(ref mut list) = entry.value {
+            if let Some(val) = list.pop_front() {
+                let mut res = Vec::with_capacity(val.len() + key.len() + 64);
+
+                write!(res, "*2\r\n").unwrap();
+
+                write!(res, "${}\r\n", key.len()).unwrap();
+                res.extend_from_slice(key);
+                res.extend_from_slice(b"\r\n");
+
+                write!(res, "${}\r\n", val.len()).unwrap();
+                res.extend_from_slice(&val);
+                res.extend_from_slice(b"\r\n");
+
+                return Ok(res);
+            }
+        }
+    }
+
+    Err(b"__BLOCK__".to_vec())
+});
+
 pub type CommandTable = HashMap<&'static [u8], CommandHandler>;
 
 pub fn command_table() -> CommandTable {
@@ -384,6 +411,7 @@ pub fn command_table() -> CommandTable {
     table.insert(b"LPUSH", lpush);
     table.insert(b"LLEN", llen);
     table.insert(b"LPOP", lpop);
+    table.insert(b"BLPOP", blpop);
     table
 }
 

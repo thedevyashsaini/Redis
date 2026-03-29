@@ -1,5 +1,5 @@
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, VecDeque};
+use std::collections::{BinaryHeap, VecDeque, HashMap};
 use std::io::Write;
 use std::time::Instant;
 
@@ -35,168 +35,192 @@ pub fn parse_bulk_string(buf: &[u8], start: usize) -> Option<(&[u8], usize)> {
     Some((&buf[data_start..data_end], data_end + 2))
 }
 
-#[derive(Debug)]
-pub enum CommandType {
-    // test
-    PING,
-    ECHO,
-
-    // KV
-    SET,
-    GET,
-
-    // LIST
-    RPUSH,
+pub fn normalize_upper<'a>(cmd: &[u8], buf: &'a mut [u8]) -> &'a [u8] {
+    for (i, b) in cmd.iter().enumerate() {
+        buf[i] = b.to_ascii_uppercase();
+    }
+    &buf[..cmd.len()]
 }
 
-#[derive(Debug)]
-pub struct Command<'a> {
-    pub cmd_type: CommandType,
-    pub args: Vec<&'a [u8]>,
+type CommandHandler = fn(
+    args: &[&[u8]],
+    db: &mut DB,
+    expiries: &mut BinaryHeap<(Reverse<Instant>, Vec<u8>)>,
+) -> Result<Vec<u8>, Vec<u8>>;
+
+fn ping(
+    args: &[&[u8]],
+    _db: &mut DB,
+    _expiries: &mut BinaryHeap<(Reverse<Instant>, Vec<u8>)>,
+) -> Result<Vec<u8>, Vec<u8>> {
+    if !args.is_empty() {
+        let arg = args[0];
+        let mut res = Vec::with_capacity(arg.len() + 32);
+        write!(res, "${}\r\n", arg.len()).unwrap();
+        res.extend_from_slice(arg);
+        res.extend_from_slice(b"\r\n");
+        Ok(res)
+    } else {
+        Ok(b"+PONG\r\n".to_vec())
+    }
 }
 
-impl Command<'_> {
-    pub(crate) fn process(
-        &self,
-        db: &mut DB,
-        expiries: &mut BinaryHeap<(Reverse<Instant>, Vec<u8>)>,
-    ) -> Result<Vec<u8>, Vec<u8>> {
-        match self.cmd_type {
-            CommandType::PING => {
-                if !self.args.is_empty() {
-                    let arg = self.args[0];
-                    let mut res = Vec::with_capacity(arg.len() + 32);
+fn echo(
+    args: &[&[u8]],
+    _db: &mut DB,
+    _expiries: &mut BinaryHeap<(Reverse<Instant>, Vec<u8>)>,
+) -> Result<Vec<u8>, Vec<u8>> {
+    if args.is_empty() {
+        Err(b"-ERR wrong number of arguments\r\n".to_vec())
+    } else {
+        let arg = args[0];
+        let mut res = Vec::with_capacity(arg.len() + 32);
+        write!(res, "${}\r\n", arg.len()).unwrap();
+        res.extend_from_slice(arg);
+        res.extend_from_slice(b"\r\n");
+        Ok(res)
+    }
+}
 
-                    write!(res, "${}\r\n", arg.len()).unwrap();
-                    res.extend_from_slice(arg);
-                    res.extend_from_slice(b"\r\n");
+fn set(
+    args: &[&[u8]],
+    db: &mut DB,
+    expiries: &mut BinaryHeap<(Reverse<Instant>, Vec<u8>)>,
+) -> Result<Vec<u8>, Vec<u8>> {
+    let key = args.get(0).ok_or(b"ERR missing key".to_vec())?;
+    let value = args.get(1).ok_or(b"ERR missing value".to_vec())?;
 
-                    Ok(res)
-                } else {
-                    Ok(b"+PONG\r\n".to_vec())
-                }
+    let mut expiry: Option<Instant> = None;
+
+    let rn = Instant::now();
+    if args.len() > 2 {
+        let option = std::str::from_utf8(args[2]).unwrap().to_uppercase();
+
+        if option == "EX" || option == "PX" {
+            let exp = std::str::from_utf8(
+                args.get(3).ok_or(b"ERR missing EX value".to_vec())?
+            )
+                .unwrap()
+                .parse::<u64>()
+                .map_err(|_| b"ERR invalid EX/PX value".to_vec())?;
+
+            let duration = if option == "PX" {
+                std::time::Duration::from_millis(exp)
+            } else {
+                std::time::Duration::from_secs(exp)
+            };
+
+            expiry = Some(rn + duration);
+        }
+    }
+
+    if let Some(exp) = expiry {
+        expiries.push((Reverse(exp), key.to_vec()));
+    }
+
+    db.insert(
+        key.to_vec(),
+        Entry {
+            value: Value::String(value.to_vec()),
+            expiry,
+        },
+    );
+
+    Ok(b"+OK\r\n".to_vec())
+}
+
+fn get(
+    args: &[&[u8]],
+    db: &mut DB,
+    _expiries: &mut BinaryHeap<(Reverse<Instant>, Vec<u8>)>,
+) -> Result<Vec<u8>, Vec<u8>> {
+    let key = args.get(0).ok_or(b"ERR missing key".to_vec())?;
+
+    if let Some(entry) = db.get(*key) {
+        if let Some(exp) = entry.expiry {
+            if Instant::now() >= exp {
+                db.remove(*key);
+                return Ok(b"$-1\r\n".to_vec());
             }
-            CommandType::ECHO => {
-                if self.args.is_empty() {
-                    Err(b"-ERR wrong number of arguments\r\n".to_vec())
-                } else {
-                    let arg = self.args[0];
-                    let mut res = Vec::with_capacity(arg.len() + 32);
-                    write!(res, "${}\r\n", arg.len()).unwrap();
-                    res.extend_from_slice(arg);
-                    res.extend_from_slice(b"\r\n");
-                    Ok(res)
-                }
+        }
+
+        match &entry.value {
+            Value::String(val) => {
+                let mut res = Vec::with_capacity(val.len() + 32);
+                write!(res, "${}\r\n", val.len()).unwrap();
+                res.extend_from_slice(val);
+                res.extend_from_slice(b"\r\n");
+                Ok(res)
             }
-            CommandType::SET => {
-                let key = self.args.get(0).ok_or("ERR missing key")?;
-                let value = self.args.get(1).ok_or("ERR missing value")?;
+            _ => Err(b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n".to_vec()),
+        }
+    } else {
+        Ok(b"$-1\r\n".to_vec())
+    }
+}
 
-                let mut expiry: Option<Instant> = None;
+fn rpush(
+    args: &[&[u8]],
+    db: &mut DB,
+    _expiries: &mut BinaryHeap<(Reverse<Instant>, Vec<u8>)>,
+) -> Result<Vec<u8>, Vec<u8>> {
+    let key = args.get(0).ok_or(b"ERR missing key".to_vec())?;
+    if args.len() < 2 {
+        return Err(b"-ERR wrong number of arguments\r\n".to_vec());
+    }
 
-                let rn = Instant::now();
-                if self.args.len() > 2 {
-                    let option = std::str::from_utf8(self.args[2]).unwrap().to_uppercase();
+    let values = &args[1..];
 
-                    if option == "EX" || option == "PX" {
-                        let exp =
-                            std::str::from_utf8(self.args.get(3).ok_or("ERR missing EX value")?)
-                                .unwrap()
-                                .parse::<u64>()
-                                .map_err(|_| "ERR invalid EX/PX value")?;
+    let list_len: usize;
 
-                        let duration = if option == "PX" {
-                            std::time::Duration::from_millis(exp)
-                        } else {
-                            std::time::Duration::from_secs(exp)
-                        };
-
-                        expiry = Some(rn + duration);
-                    }
-                }
-
-                if let Some(exp) = expiry {
-                    expiries.push((Reverse(exp), key.to_vec()));
-                }
-
-                db.insert(
-                    key.to_vec(),
-                    Entry {
-                        value: Value::String(value.to_vec()),
-                        expiry,
-                    },
-                );
-                Ok(b"+OK\r\n".to_vec())
-            }
-
-            CommandType::RPUSH => {
-                let key = self.args.get(0).ok_or("ERR missing key")?;
-                if self.args.len() < 2 {
-                    return Err(b"-ERR wrong number of arguments\r\n".to_vec());
-                }
-
-                let values = &self.args[1..];
-
-                let list_len: usize;
-
-                if let Some(Entry {
+    if let Some(Entry {
                     value: Value::List(ref mut list),
                     ..
                 }) = db.get_mut(*key)
-                {
-                    for v in values {
-                        list.push_front(v.to_vec());
-                    }
-                    list_len = list.len();
-                } else {
-                    let mut newlist = VecDeque::new();
-                    for v in values {
-                        newlist.push_front(v.to_vec());
-                    }
-
-                    list_len = newlist.len();
-
-                    db.insert(
-                        key.to_vec(),
-                        Entry {
-                            value: Value::List(newlist),
-                            expiry: None,
-                        },
-                    );
-                }
-
-                let mut res = Vec::with_capacity(32);
-                write!(res, ":{}\r\n", list_len).unwrap();
-                Ok(res)
-            }
-
-            CommandType::GET => {
-                let key = self.args.get(0).ok_or("ERR missing key")?;
-
-                if let Some(entry) = db.get(*key) {
-                    if let Some(exp) = entry.expiry {
-                        if Instant::now() >= exp {
-                            db.remove(*key);
-                            return Ok(b"$-1\r\n".to_vec());
-                        }
-                    }
-
-                    match &entry.value {
-                        Value::String(val) => {
-                            let mut res = Vec::with_capacity(val.len() + 32);
-                            write!(res, "${}\r\n", val.len()).unwrap();
-                            res.extend_from_slice(val);
-                            res.extend_from_slice(b"\r\n");
-                            Ok(res)
-                        }
-                        _ => Err(b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n".to_vec()),
-                    }
-                } else {
-                    Ok(b"$-1\r\n".to_vec())
-                }
-            }
+    {
+        for v in values {
+            list.push_front(v.to_vec());
         }
+        list_len = list.len();
+    } else {
+        let mut newlist = VecDeque::new();
+        for v in values {
+            newlist.push_front(v.to_vec());
+        }
+
+        list_len = newlist.len();
+
+        db.insert(
+            key.to_vec(),
+            Entry {
+                value: Value::List(newlist),
+                expiry: None,
+            },
+        );
     }
+
+    let mut res = Vec::with_capacity(32);
+    write!(res, ":{}\r\n", list_len).unwrap();
+    Ok(res)
+}
+
+
+pub type CommandTable = HashMap<&'static [u8], CommandHandler>;
+
+pub fn command_table() -> CommandTable {
+    let mut table: CommandTable = HashMap::new();
+
+    table.insert(b"PING", ping);
+    table.insert(b"ECHO", echo);
+    table.insert(b"SET", set);
+    table.insert(b"GET", get);
+    table.insert(b"RPUSH", rpush);
+    table
+}
+
+pub struct Command<'a> {
+    pub name: &'a [u8],
+    pub args: Vec<&'a [u8]>,
 }
 
 pub fn parse_command(buf: &[u8]) -> Result<Command<'_>, Vec<u8>> {
@@ -215,8 +239,6 @@ pub fn parse_command(buf: &[u8]) -> Result<Command<'_>, Vec<u8>> {
     let (cmd_bytes, new_pos) = parse_bulk_string(buf, pos).ok_or("Invalid")?;
     pos = new_pos;
 
-    let cmd = std::str::from_utf8(cmd_bytes).map_err(|_| "Invalid")?;
-
     let mut args = Vec::with_capacity(count - 1);
 
     for _ in 0..count - 1 {
@@ -225,15 +247,5 @@ pub fn parse_command(buf: &[u8]) -> Result<Command<'_>, Vec<u8>> {
         pos = new_pos;
     }
 
-    // heavy string thing, replace later prolly
-    let cmd_type = match cmd.to_uppercase().as_str() {
-        "PING" => CommandType::PING,
-        "ECHO" => CommandType::ECHO,
-        "SET" => CommandType::SET,
-        "GET" => CommandType::GET,
-        "RPUSH" => CommandType::RPUSH,
-        _ => return Err(b"Invalid command".to_vec()),
-    };
-
-    Ok(Command { cmd_type, args })
+    Ok(Command { name: cmd_bytes, args })
 }

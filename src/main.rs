@@ -9,6 +9,8 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
+use commands::normalize_upper;
+use commands::command_table;
 
 const SERVER: Token = Token(0);
 const MAX_CLEANUP: usize = 169;
@@ -39,6 +41,7 @@ fn main() -> std::io::Result<()> {
 
     let mut db: DB = HashMap::new();
     let mut expiries: BinaryHeap<(Reverse<Instant>, Vec<u8>)> = BinaryHeap::new();
+    let table = command_table();
 
     loop {
         cleanup_expired(&mut db, &mut expiries);
@@ -89,13 +92,21 @@ fn main() -> std::io::Result<()> {
 
                                     match parse_command(r_buffer) {
                                         Ok(command) => {
-                                            println!("Command: {:?}", command.cmd_type);
-
-                                            let response =
-                                                command.process(&mut db, &mut expiries).unwrap();
+                                            let mut temp = [0u8; 32];
+                                            let normalized = normalize_upper(command.name, &mut temp);
 
                                             let is_empty: bool = w_buffer.is_empty();
-                                            w_buffer.extend_from_slice(&response);
+
+                                            match table.get(normalized) {
+                                                Some(handler) => {
+                                                    match &(handler)(&command.args, &mut db, &mut expiries) {
+                                                        Ok(bytes) | Err(bytes)  => w_buffer.extend_from_slice(bytes),
+                                                    }
+                                                }
+                                                None => {
+                                                    w_buffer.extend_from_slice(b"-ERR unknown command\r\n");
+                                                }
+                                            }
 
                                             if is_empty {
                                                 poll.registry().reregister(

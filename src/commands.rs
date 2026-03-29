@@ -1,9 +1,9 @@
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, VecDeque, HashMap};
+use std::collections::{VecDeque, HashMap};
 use std::io::Write;
 use std::time::Instant;
 
-use crate::{Entry, Value, DB};
+use crate::{Entry, Expiries, Value, DB};
 
 pub fn read_line(buf: &[u8], start: usize) -> Option<(usize, usize)> {
     for i in start..buf.len() - 1 {
@@ -45,14 +45,20 @@ pub fn normalize_upper<'a>(cmd: &[u8], buf: &'a mut [u8]) -> &'a [u8] {
 type CommandHandler = fn(
     args: &[&[u8]],
     db: &mut DB,
-    expiries: &mut BinaryHeap<(Reverse<Instant>, Vec<u8>)>,
+    expiries: &mut Expiries,
 ) -> Result<Vec<u8>, Vec<u8>>;
 
-fn ping(
-    args: &[&[u8]],
-    _db: &mut DB,
-    _expiries: &mut BinaryHeap<(Reverse<Instant>, Vec<u8>)>,
-) -> Result<Vec<u8>, Vec<u8>> {
+macro_rules! command_handler {
+    ($name:ident, $args:ident, $db:ident, $exp:ident, $body:block) => {
+        fn $name(
+            $args: &[&[u8]],
+            $db: &mut DB,
+            $exp: &mut Expiries,
+        ) -> Result<Vec<u8>, Vec<u8>> $body
+    };
+}
+
+command_handler!(ping, args, _db, _expiries, {
     if !args.is_empty() {
         let arg = args[0];
         let mut res = Vec::with_capacity(arg.len() + 32);
@@ -63,13 +69,9 @@ fn ping(
     } else {
         Ok(b"+PONG\r\n".to_vec())
     }
-}
+});
 
-fn echo(
-    args: &[&[u8]],
-    _db: &mut DB,
-    _expiries: &mut BinaryHeap<(Reverse<Instant>, Vec<u8>)>,
-) -> Result<Vec<u8>, Vec<u8>> {
+command_handler!(echo, args, _db, _expiries, {
     if args.is_empty() {
         Err(b"-ERR wrong number of arguments\r\n".to_vec())
     } else {
@@ -80,13 +82,9 @@ fn echo(
         res.extend_from_slice(b"\r\n");
         Ok(res)
     }
-}
+});
 
-fn set(
-    args: &[&[u8]],
-    db: &mut DB,
-    expiries: &mut BinaryHeap<(Reverse<Instant>, Vec<u8>)>,
-) -> Result<Vec<u8>, Vec<u8>> {
+command_handler!(set, args, db, expiries, {
     let key = args.get(0).ok_or(b"ERR missing key".to_vec())?;
     let value = args.get(1).ok_or(b"ERR missing value".to_vec())?;
 
@@ -127,14 +125,10 @@ fn set(
     );
 
     Ok(b"+OK\r\n".to_vec())
-}
+});
 
-fn get(
-    args: &[&[u8]],
-    db: &mut DB,
-    _expiries: &mut BinaryHeap<(Reverse<Instant>, Vec<u8>)>,
-) -> Result<Vec<u8>, Vec<u8>> {
-    let key = args.get(0).ok_or(b"ERR missing key".to_vec())?;
+command_handler!(get, args, db, _expiries, {
+   let key = args.get(0).ok_or(b"ERR missing key".to_vec())?;
 
     if let Some(entry) = db.get(*key) {
         if let Some(exp) = entry.expiry {
@@ -157,13 +151,9 @@ fn get(
     } else {
         Ok(b"$-1\r\n".to_vec())
     }
-}
+});
 
-fn rpush(
-    args: &[&[u8]],
-    db: &mut DB,
-    _expiries: &mut BinaryHeap<(Reverse<Instant>, Vec<u8>)>,
-) -> Result<Vec<u8>, Vec<u8>> {
+command_handler!(rpush, args, db, _expiries, {
     let key = args.get(0).ok_or(b"ERR missing key".to_vec())?;
     if args.len() < 2 {
         return Err(b"-ERR wrong number of arguments\r\n".to_vec());
@@ -179,13 +169,13 @@ fn rpush(
                 }) = db.get_mut(*key)
     {
         for v in values {
-            list.push_front(v.to_vec());
+            list.push_back(v.to_vec());
         }
         list_len = list.len();
     } else {
         let mut newlist = VecDeque::new();
         for v in values {
-            newlist.push_front(v.to_vec());
+            newlist.push_back(v.to_vec());
         }
 
         list_len = newlist.len();
@@ -202,8 +192,52 @@ fn rpush(
     let mut res = Vec::with_capacity(32);
     write!(res, ":{}\r\n", list_len).unwrap();
     Ok(res)
-}
+});
 
+command_handler!(lrange, args, db, _expiries, {
+    let key = args.get(0).ok_or(b"ERR missing key".to_vec())?;
+    let start = args.get(1).ok_or(b"ERR missing start".to_vec())?;
+    let stop = args.get(2).ok_or(b"ERR missing stop".to_vec())?;
+
+    if let Some(entry) = db.get(*key) {
+        match &entry.value {
+            Value::List(list) => {
+                let start = std::str::from_utf8(start).unwrap().parse::<isize>().unwrap();
+                let stop = std::str::from_utf8(stop).unwrap().parse::<isize>().unwrap();
+
+                let len = list.len() as isize;
+
+                let mut start = if start < 0 { len + start } else { start };
+                let mut stop = if stop < 0 { len + stop } else { stop };
+
+                if start < 0 { start = 0; }
+                if stop >= len { stop = len - 1; }
+
+                if start > stop || start >= len {
+                    return Ok(b"*0\r\n".to_vec());
+                }
+
+                let start = start as usize;
+                let count = stop as usize - start + 1;
+
+                let mut res = Vec::with_capacity(count * 16);
+
+                write!(res, "*{}\r\n", count).unwrap();
+
+                for item in list.iter().skip(start).take(count) {
+                    write!(res, "${}\r\n", item.len()).unwrap();
+                    res.extend_from_slice(item);
+                    res.extend_from_slice(b"\r\n");
+                }
+
+                Ok(res)
+            },
+            _ => Err(b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n".to_vec()),
+        }
+    } else {
+        Ok(b"*0\r\n".to_vec())
+    }
+});
 
 pub type CommandTable = HashMap<&'static [u8], CommandHandler>;
 
@@ -215,6 +249,7 @@ pub fn command_table() -> CommandTable {
     table.insert(b"SET", set);
     table.insert(b"GET", get);
     table.insert(b"RPUSH", rpush);
+    table.insert(b"LRANGE", lrange);
     table
 }
 

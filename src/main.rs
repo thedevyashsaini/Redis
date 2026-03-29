@@ -26,6 +26,7 @@ pub struct Entry {
 }
 
 pub type DB = HashMap<Vec<u8>, Entry>;
+pub type Expiries = BinaryHeap<(Reverse<Instant>, Vec<u8>)>;
 
 fn main() -> std::io::Result<()> {
     println!("Starting Redis-like server on 127.0.0.1:6379");
@@ -40,7 +41,7 @@ fn main() -> std::io::Result<()> {
     let mut connections = Slab::new();
 
     let mut db: DB = HashMap::new();
-    let mut expiries: BinaryHeap<(Reverse<Instant>, Vec<u8>)> = BinaryHeap::new();
+    let mut expiries: Expiries = BinaryHeap::new();
     let table = command_table();
 
     loop {
@@ -172,7 +173,7 @@ fn main() -> std::io::Result<()> {
     }
 }
 
-fn cleanup_expired(db: &mut DB, expiries: &mut BinaryHeap<(Reverse<Instant>, Vec<u8>)>) {
+fn cleanup_expired(db: &mut DB, expiries: &mut Expiries) {
     let rn = Instant::now();
     let mut cleaned: usize = 0;
 

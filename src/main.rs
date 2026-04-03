@@ -2,18 +2,21 @@ use mio::net::TcpListener;
 use mio::{Events, Interest, Poll, Token};
 use slab::Slab;
 use std::io::{Read, Write};
-
-mod commands;
-use commands::command_table;
-use commands::normalize_upper;
-use commands::parse_command;
+use std::sync::Arc;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 
+mod commands;
+use commands::command_table;
+use commands::normalize_upper;
+use commands::parse_command;
+
 const SERVER: Token = Token(0);
 const MAX_CLEANUP: usize = 169;
+
+pub type Key = Arc<[u8]>;
 
 pub enum Value {
     String(Vec<u8>),
@@ -25,10 +28,10 @@ pub struct Entry {
     expiry: Option<Instant>,
 }
 
-pub type DB = HashMap<Vec<u8>, Entry>;
-pub type Expiries = BinaryHeap<(Reverse<Instant>, Vec<u8>)>;
+pub type DB = HashMap<Key, Entry>;
+pub type Expiries = BinaryHeap<(Reverse<Instant>, Key)>;
 
-
+pub type ConnectionSlab = Slab<(mio::net::TcpStream, Vec<u8>, Vec<u8>, bool, Option<Key>, Option<Instant>)>;
 
 fn main() -> std::io::Result<()> {
     println!("Starting Redis-like server on 127.0.0.1:6379");
@@ -40,11 +43,11 @@ fn main() -> std::io::Result<()> {
     poll.registry()
         .register(&mut listener, SERVER, Interest::READABLE)?;
 
-    let mut connections = Slab::new();
+    let mut connections: ConnectionSlab = Slab::new();
 
     let mut db: DB = HashMap::new();
     let mut expiries: Expiries = BinaryHeap::new();
-    let mut blocked_queues: HashMap<Vec<u8>, VecDeque<Token>> = HashMap::new();
+    let mut blocked_queues: HashMap<Key, VecDeque<Token>> = HashMap::new();
     let mut blocked_timeouts: BinaryHeap<(Reverse<Instant>, Token)> = BinaryHeap::new();
 
     let table = command_table();
@@ -128,7 +131,7 @@ fn main() -> std::io::Result<()> {
                                                             w_buffer.extend_from_slice(&bytes);
 
                                                             if normalized == b"LPUSH" || normalized == b"RPUSH" {
-                                                                if let Some(key) = command.args.get(0) {
+                                                                    if let Some(key) = command.args.get(0) {
                                                                     wake_key = Some(key.to_vec());
                                                                 }
                                                             }
@@ -137,7 +140,7 @@ fn main() -> std::io::Result<()> {
                                                             if bytes == b"__BLOCK__" {
                                                                 *blocked_flag = true;
 
-                                                                let key = command.args[0].to_vec();
+                                                                let key: Key = Arc::from(command.args[0]);
 
                                                                 *block_key = Some(key.clone());
 
@@ -155,7 +158,7 @@ fn main() -> std::io::Result<()> {
                                                                 }
 
                                                                 blocked_queues
-                                                                    .entry(key)
+                                                                    .entry(key.clone())
                                                                     .or_insert_with(VecDeque::new)
                                                                     .push_back(token);
 
@@ -276,8 +279,8 @@ fn cleanup_expired(db: &mut DB, expiries: &mut Expiries) {
 fn wake_client(
     key: &[u8],
     db: &mut DB,
-    blocked_queues: &mut HashMap<Vec<u8>, VecDeque<Token>>,
-    connections: &mut Slab<(mio::net::TcpStream, Vec<u8>, Vec<u8>, bool, Option<Vec<u8>>, Option<Instant>)>,
+    blocked_queues: &mut HashMap<Key, VecDeque<Token>>,
+    connections: &mut ConnectionSlab,
     poll: &mut Poll,
 ) -> std::io::Result<()> {
     if let Some(queue) = blocked_queues.get_mut(key) {
@@ -334,7 +337,7 @@ fn wake_client(
 }
 
 fn cleanup_blocked(
-    connections: &mut Slab<(mio::net::TcpStream, Vec<u8>, Vec<u8>, bool, Option<Vec<u8>>, Option<Instant>)>,
+    connections: &mut ConnectionSlab,
     blocked_timeouts: &mut BinaryHeap<(Reverse<Instant>, Token)>,
     poll: &mut Poll,
 ) {

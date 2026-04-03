@@ -1,9 +1,10 @@
 use std::cmp::Reverse;
 use std::collections::{HashMap, VecDeque};
 use std::io::Write;
+use std::sync::Arc;
 use std::time::Instant;
 
-use crate::{Entry, Expiries, Value, DB};
+use crate::{Entry, Expiries, Key, Value, DB};
 
 pub fn read_line(buf: &[u8], start: usize) -> Option<(usize, usize)> {
     for i in start..buf.len() - 1 {
@@ -85,6 +86,8 @@ command_handler!(set, args, db, expiries, {
     let key = args.get(0).ok_or(b"ERR missing key".to_vec())?;
     let value = args.get(1).ok_or(b"ERR missing value".to_vec())?;
 
+    let key: Key = Arc::from(*key);
+
     let mut expiry: Option<Instant> = None;
 
     let rn = Instant::now();
@@ -108,11 +111,11 @@ command_handler!(set, args, db, expiries, {
     }
 
     if let Some(exp) = expiry {
-        expiries.push((Reverse(exp), key.to_vec()));
+        expiries.push((Reverse(exp), key.clone()));
     }
 
     db.insert(
-        key.to_vec(),
+        key.clone(),
         Entry {
             value: Value::String(value.to_vec()),
             expiry,
@@ -152,6 +155,7 @@ command_handler!(get, args, db, _expiries, {
 
 command_handler!(rpush, args, db, _expiries, {
     let key = args.get(0).ok_or(b"ERR missing key".to_vec())?;
+
     if args.len() < 2 {
         return Err(b"-ERR wrong number of arguments\r\n".to_vec());
     }
@@ -160,10 +164,12 @@ command_handler!(rpush, args, db, _expiries, {
 
     let list_len: usize;
 
+    let key_bytes: &[u8] = key;
+
     if let Some(Entry {
         value: Value::List(ref mut list),
         ..
-    }) = db.get_mut(*key)
+    }) = db.get_mut(key_bytes)
     {
         for v in values {
             list.push_back(v.to_vec());
@@ -177,8 +183,10 @@ command_handler!(rpush, args, db, _expiries, {
 
         list_len = newlist.len();
 
+        let key: Key = Arc::from(*key);
+
         db.insert(
-            key.to_vec(),
+            key.clone(),
             Entry {
                 value: Value::List(newlist),
                 expiry: None,
@@ -193,6 +201,7 @@ command_handler!(rpush, args, db, _expiries, {
 
 command_handler!(lpush, args, db, _expiries, {
     let key = args.get(0).ok_or(b"ERR missing key".to_vec())?;
+
     if args.len() < 2 {
         return Err(b"-ERR wrong number of arguments\r\n".to_vec());
     }
@@ -201,10 +210,12 @@ command_handler!(lpush, args, db, _expiries, {
 
     let list_len: usize;
 
+    let key_bytes: &[u8] = key;
+
     if let Some(Entry {
         value: Value::List(ref mut list),
         ..
-    }) = db.get_mut(*key)
+    }) = db.get_mut(key_bytes)
     {
         for v in values {
             list.push_front(v.to_vec());
@@ -218,8 +229,10 @@ command_handler!(lpush, args, db, _expiries, {
 
         list_len = newlist.len();
 
+        let key: Key = Arc::from(*key);
+
         db.insert(
-            key.to_vec(),
+            key.clone(),
             Entry {
                 value: Value::List(newlist),
                 expiry: None,

@@ -497,6 +497,29 @@ command_handler!(publish, args, ctx, {
     Ok(res)
 });
 
+command_handler!(unsubscribe, args, ctx, {
+    if *ctx.is_pubsub {
+        let channel = args.get(0).ok_or(b"-ERR missing key".to_vec())?;
+        let channel_key = channel.to_vec();
+        if let Some(index) = ctx.subscriptions.iter().position(|n| n == &channel_key) {
+            ctx.subscriptions.remove(index);
+            ctx.pubsub.entry(channel_key).and_modify(|x| {
+                if let Some(idx) = x.iter().position(|x1| x1.eq(&ctx.token)) {
+                    x.remove(idx);
+                }
+            });
+        }
+        let mut res = Vec::with_capacity(26 + channel.len() + 1 + 20 + 2);
+        res.extend_from_slice(b"*3\r\n$11\r\nunsubscribe\r\n");
+        write!(res, "${}\r\n", channel.len()).unwrap();
+        res.extend_from_slice(channel);
+        write!(res, "\r\n:{}\r\n", ctx.subscriptions.len()).unwrap();
+        Ok(res)
+    } else {
+        Ok(b"-Err not in subscribed mode".to_vec())
+    }
+});
+
 pub type CommandTable = HashMap<&'static [u8], CommandHandler>;
 
 pub fn command_table() -> CommandTable {
@@ -514,6 +537,7 @@ pub fn command_table() -> CommandTable {
     table.insert(b"BLPOP", blpop);
     table.insert(b"SUBSCRIBE", subscribe);
     table.insert(b"PUBLISH", publish);
+    table.insert(b"UNSUBSCRIBE", unsubscribe);
     table
 }
 

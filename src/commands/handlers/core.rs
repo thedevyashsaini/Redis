@@ -1,6 +1,7 @@
-use std::io::Write;
 use crate::command_handler;
 use crate::commands::Context;
+use std::io::Write;
+use crate::types::{Entry, Value};
 
 command_handler!(ping, args, ctx, {
     if !args.is_empty() {
@@ -33,4 +34,18 @@ command_handler!(echo, args, _ctx, {
         res.extend_from_slice(b"\r\n");
         Ok(res)
     }
+});
+
+command_handler!(typee, args, ctx, {
+    let key = args.get(0).ok_or(b"-ERR missing key".to_vec())?;
+    if let Some(Entry { value, ..}) = ctx.db.get(*key) {
+        let ret = match value {
+            Value::List(_) =>  b"+list\r\n".to_vec(),
+            Value::String(_) => b"+string\r\n".to_vec(),
+        };
+        let mut res = Vec::with_capacity(9);
+        res.extend_from_slice(&*ret);
+        return Ok(res);
+    }
+    Err(b"+none\r\n".to_vec())
 });

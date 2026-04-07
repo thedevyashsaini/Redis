@@ -41,5 +41,6 @@ pub fn command_table() -> CommandTable {
     table.insert(b"SUBSCRIBE", handlers::pubsub::subscribe);
     table.insert(b"PUBLISH", handlers::pubsub::publish);
     table.insert(b"UNSUBSCRIBE", handlers::pubsub::unsubscribe);
+    table.insert(b"TYPE", handlers::core::typee);
     table
 }

@@ -8,11 +8,8 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="ec91d0db-f3b0-4939-98eb-c1c7dc93f130" name="Changes" comment="">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/commands/handlers/core.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/commands/handlers/core.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/commands/handlers/lists.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/commands/handlers/lists.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/commands/handlers/mod.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/commands/handlers/mod.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/commands/handlers/pubsub.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/commands/handlers/pubsub.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/commands/handlers/strings.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/commands/handlers/strings.rs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/commands/mod.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/commands/mod.rs" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -114,7 +111,7 @@
       <workItem from="1775364098239" duration="7555000" />
       <workItem from="1775396066108" duration="40000" />
       <workItem from="1775533733207" duration="1197000" />
-      <workItem from="1775536202836" duration="1490000" />
+      <workItem from="1775536202836" duration="2461000" />
     </task>
     <servers />
   </component>

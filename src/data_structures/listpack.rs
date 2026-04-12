@@ -403,3 +403,25 @@ fn read_num_elements(data: &[u8]) -> u16 {
 fn write_num_elements(data: &mut [u8], v: u16) {
     data[4..6].copy_from_slice(&v.to_le_bytes());
 }
+
+// checking
+
+//     let mut lp = Listpack::new();
+//
+//     lp.append(b"hello").unwrap();
+//     lp.append(b"123").unwrap();
+//     lp.append(b"world").unwrap();
+//     lp.append(b"-45").unwrap();
+//
+//     println!("len = {}", lp.len());
+//
+//     for (i, v) in lp.iter().enumerate() {
+//         match v {
+//             ListpackValueRef::String(s) => {
+//                 println!("{}: str = {}", i, std::str::from_utf8(s).unwrap());
+//             }
+//             ListpackValueRef::Int(x) => {
+//                 println!("{}: int = {}", i, x);
+//             }
+//         }
+//     }

@@ -9,6 +9,10 @@ command_handler!(xadd, args, ctx, {
     let key = args.get(0).ok_or(b"-ERR missing key".to_vec())?;
     let entry_id = args.get(1).ok_or(b"-ERR missing entry id".to_vec())?;
 
+    if entry_id == b"0-0" {
+        return Err(b"-ERR The ID specified in XADD must be greater than 0-0\r\n".to_vec());
+    }
+
     let fields: Vec<(&[u8], &[u8])>  = {
         let kv = &args[2..];
 

@@ -72,7 +72,7 @@ impl Stream {
     pub fn add(&mut self, id: StreamID, fields: &[(&[u8], &[u8])]) -> Result<(), Vec<u8>>{
         if let Some(last) = self.last_id {
             if id <= last {
-                return Err(b"Stream IDs must be strictly increasing".to_vec());
+                return Err(b"-ERR The ID specified in XADD is equal or smaller than the target stream top item\r\n".to_vec());
             }
         }
         if let Some(prev_key) = self.get_floor_key(&id) {
